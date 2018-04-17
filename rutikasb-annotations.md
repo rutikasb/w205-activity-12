@@ -111,7 +111,7 @@ After running the command, we see the following output:
 `Created topic "events"`
 
 
-### Step 3: Create a simple web API server
+### Step 3: Create a simple web API server and add additional API parameter `sword_type`
 
 I used the python `Flask` module to setup a simple API server. Following is the python script, `game_api.py`
 
@@ -151,7 +151,7 @@ Everytime an API is called, along with carrying out the API logic, it also logs 
 
 I run the web server in the MIDS container with the following command. This will run and print output to the command line each time we make a web API call. It will hold the command line until I exit with Ctrl-C.
 
-`docker-compose exec mids env FLASK_APP=/w205/spark-from-files/game_api.py flask run --host 0.0.0.0`
+`docker-compose exec mids env FLASK_APP=/w205/activity-12-rutikasb/game_api.py flask run --host 0.0.0.0`
 
 The web server is started on port 5000
 
@@ -466,7 +466,94 @@ freq	10	10	                10	        10	        10	        1
 
 ```
 
+### Step 9: Additional options that we tried -- logged user information and wrote the events filtered by particular username to HDFS
 
-### Step 9: Bring down the docker cluster
+We made the following code changes to log the user name of the game player to Kafka. The complete code is in `game_api_user.py` file.
+
+```
+@app.route("/purchase_a_sword")
+def purchase_a_sword():
+    # get request parameters/arguments
+    sword_type = request.args.get("sword_type")
+
+    # logic to get username from session info goes here, but harcoding it for now
+    username = 'Rutika and Arvind'
+    purchase_sword_event = {'event_type': 'purchase_sword',
+                            'sword_type': sword_type,
+                            'user': username}
+    log_to_kafka('events', purchase_sword_event)
+    return "Sword Purchased of type {}!\n".format(sword_type)
+```
+
+Following is the code to write filtered user events to HDFS
+
+```
+#!/usr/bin/env python
+"""Extract events from kafka and write them to hdfs
+"""
+import json
+from pyspark.sql import SparkSession, Row
+from pyspark.sql.functions import udf
+
+
+@udf('boolean')
+def is_right_user(event_as_json):
+    event = json.loads(event_as_json)
+    print(event)
+    if event['sword_type'] == 'Rutika and Arvind':
+        return True
+    return False
+
+
+def main():
+    """main
+    """
+    spark = SparkSession \
+        .builder \
+        .appName("ExtractEventsJob") \
+        .getOrCreate()
+
+    raw_events = spark \
+        .read \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", "kafka:29092") \
+        .option("subscribe", "events") \
+        .option("startingOffsets", "earliest") \
+        .option("endingOffsets", "latest") \
+        .load()
+
+    user_events = raw_events \
+        .select(raw_events.value.cast('string').alias('raw'),
+                raw_events.timestamp.cast('string')) \
+        .filter(is_right_user('raw'))
+
+    extracted_user_events = user_events \
+        .rdd \
+        .map(lambda r: Row(timestamp=r.timestamp, **json.loads(r.raw))) \
+        .toDF()
+    extracted_user_events.printSchema()
+    extracted_user_events.show()
+
+    extracted_user_events \
+        .write \
+        .mode('overwrite') \
+        .parquet('/tmp/users')
+
+
+if __name__ == "__main__":
+    main()
+```
+
+We verified that the script worked by looking into the /tmp folder
+
+```
+science@w205s7-crook-1:~/w205/activity-12-rutikasb$ docker-compose exec cloudera hadoop fs -ls /tmp/users
+Found 2 items
+-rw-r--r--   1 root supergroup          0 2018-04-17 07:49 /tmp/users/_SUCCESS
+-rw-r--r--   1 root supergroup       1907 2018-04-17 07:49 /tmp/users/part-00000-8de659ac-52ac-4862-b63d-ceaf87dec780-c000.snappy.parquet
+```
+
+
+### Step 10: Bring down the docker cluster
 
 Finally bring down the docker cluster with `docker-compose down`
