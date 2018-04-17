@@ -111,7 +111,7 @@ After running the command, we see the following output:
 `Created topic "events"`
 
 
-### Step 3: Create a simple web API server
+### Step 3: Create a simple web API server and add additional API parameter `sword_type`
 
 I used the python `Flask` module to setup a simple API server. Following is the python script, `game_api.py`
 
